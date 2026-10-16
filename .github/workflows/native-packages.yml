@@ -3,6 +3,8 @@
 # On a permitted default/release branch this returns signed native-packages;
 # the package-signing Environment supplies signing secrets to the sign job.
 # The caller attaches packages to its release and incorporates their manifest.
+# The caller uses job must grant contents: write for the nested dispatch-only
+# release job permission envelope, even though that job is skipped on calls.
 name: Native PostGIS packages
 on:
   workflow_call:
@@ -141,6 +143,7 @@ jobs:
   sign:
     needs: build
     if: >-
+      !cancelled() && needs.build.result == 'success' &&
       github.event_name != 'pull_request' &&
       (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ||
        startsWith(github.ref, 'refs/heads/release/'))

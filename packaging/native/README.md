@@ -60,6 +60,9 @@ Build jobs use no signing secrets. Signing runs only on the default branch or
 with `PACKAGE_SIGNING_KEY` and `PACKAGE_SIGNING_FPR`. Configure that Environment
 to permit only those branches. Reusable callers must run on a branch permitted
 by that Environment; the sign job obtains its secrets from the Environment.
+The caller’s `uses` job must grant `permissions: {contents: write}` because
+GitHub validates the nested dispatch-only release job’s permission envelope
+even when that job is skipped for a reusable call.
 Shared actions sign and independently verify
 RPMs, generate and validate the final manifest, and publish a digest-verified
 native-only release for dispatch runs. Failed drafts are cleaned up; existing
