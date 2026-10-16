@@ -1,28 +1,37 @@
 #!/usr/bin/env bash
-# Run inside Debian 12 or Rocky Linux 9, with packages at /packages and CLI /cli/gel.
+# Run inside Debian 12 or Rocky Linux 9, with packages at /packages.
 # Usage: install-test.sh deb|rpm amd64|arm64|x86_64|aarch64 SLOT
 set -euo pipefail
 format="${1:?}"; arch="${2:?}"; slot="${3:?}"
 shopt -s nullglob
-servers=(/server-packages/gel-server-"$slot"-*"-$arch.$format")
 packages=(/packages/gel-server-"$slot"-ext-postgis-*"-$arch.$format")
-test "${#servers[@]}" = 1
 test "${#packages[@]}" = 1
 server_name="gel-server-$slot"
 extension_name="$server_name-ext-postgis"
+registry="${NATIVE_REGISTRY_URL:-https://registry.gelstable.com}"
+expected_fpr="${NATIVE_REGISTRY_FINGERPRINT:-EBFC46CC958983DD73D6E7D7F7C050A836EDB7EC}"
 version() {
   if [[ "$format" == deb ]]; then dpkg-query -W -f='${Version}' "$server_name";
   else rpm -q --qf '%{EPOCH}:%{VERSION}-%{RELEASE}' "$server_name"; fi
 }
 if [[ "$format" == deb ]]; then
-  dpkg -i "${servers[0]}"
+  apt-get update
+  apt-get install -y curl ca-certificates gnupg
 else
-  if [[ -f /server-packages/test-public.asc ]]; then
-    rpm --import /server-packages/test-public.asc
-    rpmkeys --checksig "${servers[0]}"
-  fi
-  if [[ -f /packages/test-public.asc ]]; then rpm --import /packages/test-public.asc; fi
-  rpm -i "${servers[0]}"
+  dnf install -y curl-minimal ca-certificates gnupg2
+fi
+curl -fsSLo /tmp/gelstable.asc "$registry/keys/gelstable.asc"
+actual_fpr=$(gpg --batch --show-keys --with-colons /tmp/gelstable.asc | awk -F: '$1 == "fpr" {print $10; exit}')
+test "$actual_fpr" = "$expected_fpr"
+if [[ "$format" == deb ]]; then
+  install -Dm644 /tmp/gelstable.asc /etc/apt/keyrings/gelstable.asc
+  curl -fsSLo /etc/apt/sources.list.d/gelstable.sources "$registry/gelstable.sources"
+  apt-get update
+  apt-get install -y "$server_name" gel-cli
+else
+  rpm --import /tmp/gelstable.asc
+  curl -fsSLo /etc/yum.repos.d/gelstable.repo "$registry/gelstable.repo"
+  dnf install -y "$server_name" gel-cli
 fi
 before=$(version)
 if [[ "$format" == deb ]]; then dpkg -i "${packages[0]}";
@@ -51,7 +60,7 @@ cleanup() { kill -INT "$pid" 2>/dev/null || true; wait "$pid" || true; }
 trap cleanup EXIT
 ready=false
 for ((attempt=0; attempt<120; attempt++)); do
-  if /cli/gel --admin --unix-path /run/gel query 'SELECT 1 + 1' > /tmp/query.out 2>/tmp/query.err; then
+  if gel --admin --unix-path /run/gel query 'SELECT 1 + 1' > /tmp/query.out 2>/tmp/query.err; then
     ready=true
     break
   fi
@@ -61,8 +70,8 @@ done
 if [[ "$ready" != true ]]; then cat /tmp/gel-server.log /tmp/query.err; exit 1; fi
 cat /tmp/query.out
 grep -qx 2 /tmp/query.out
-/cli/gel --admin --unix-path /run/gel query 'START MIGRATION TO { using extension postgis; }; POPULATE MIGRATION; COMMIT MIGRATION;'
-/cli/gel --admin --unix-path /run/gel query 'SELECT ext::postgis::x(ext::postgis::makepoint(1.0, 2.0))' > /tmp/postgis.out
+gel --admin --unix-path /run/gel query 'START MIGRATION TO { using extension postgis; }; POPULATE MIGRATION; COMMIT MIGRATION;'
+gel --admin --unix-path /run/gel query 'SELECT ext::postgis::x(ext::postgis::makepoint(1.0, 2.0))' > /tmp/postgis.out
 cat /tmp/postgis.out
 grep -qx 1 /tmp/postgis.out
 test "$(version)" = "$before"

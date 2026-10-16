@@ -1,6 +1,4 @@
-import hashlib
 import importlib.util
-import json
 import shutil
 import subprocess
 import tempfile
@@ -17,55 +15,6 @@ class NativePackagesTests(unittest.TestCase):
         )
         self.native = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.native)
-
-    def test_verified_source_rejects_missing_digest_and_wrong_cached_bytes(self):
-        with tempfile.TemporaryDirectory() as temp:
-            source = Path(temp) / "source"
-            source.write_bytes(b"payload")
-            output = Path(temp) / "download"
-            output.write_bytes(b"corrupt")
-            asset = {
-                "browser_download_url": source.as_uri(),
-                "size": 7,
-                "digest": "sha256:" + hashlib.sha256(b"payload").hexdigest(),
-            }
-            self.native.fetch_asset(asset, output)
-            self.assertEqual(output.read_bytes(), b"payload")
-            asset["size"] = 8
-            with self.assertRaisesRegex(ValueError, "mismatch"):
-                self.native.fetch_asset(asset, output)
-            del asset["digest"]
-            with self.assertRaisesRegex(ValueError, "digest"):
-                self.native.fetch_asset(asset, output)
-
-    def test_manifest_uses_final_bytes_and_rejects_duplicate_architecture(self):
-        with tempfile.TemporaryDirectory() as temp:
-            directory = Path(temp)
-            for arch, names in self.native.ARCHES.items():
-                info = {
-                    "slot": "7",
-                    "version": "3.5.1",
-                    "revision": "1",
-                    "arch": arch,
-                    "channel": "testing",
-                    "tag": "pkg-gel-server-7-ext-postgis-3.5.1-1",
-                }
-                (directory / f"build-info-{arch}.json").write_text(json.dumps(info))
-                for format_, name in zip(["deb", "rpm"], names):
-                    (
-                        directory / f"gel-server-7-ext-postgis-3.5.1-1-{name}.{format_}"
-                    ).write_bytes(b"final signed bytes")
-            _, manifest = self.native.manifest(directory, "testing")
-            self.assertEqual(len(manifest["native"]["packages"]), 4)
-            for package in manifest["native"]["packages"]:
-                self.assertEqual(
-                    package["sha256"], hashlib.sha256(b"final signed bytes").hexdigest()
-                )
-                self.assertEqual(package["size"], 18)
-            info["arch"] = "x86_64"
-            (directory / "build-info-aarch64.json").write_text(json.dumps(info))
-            with self.assertRaisesRegex(ValueError, "architecture mismatch"):
-                self.native.manifest(directory, "testing")
 
     @unittest.skipUnless(
         all(shutil.which(t) for t in ["nfpm", "dpkg-deb", "rpm"]),

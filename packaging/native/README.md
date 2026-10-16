@@ -1,14 +1,35 @@
 # Native PostGIS packages
 
 Build on a Linux host matching the requested architecture with Python 3.12+,
-zstd, and nFPM 2.47.0. The builder verifies each published portable extension
-ZIP and server tarball against the GitHub API SHA256 and byte count before use.
+zstd, and nFPM 2.47.0. The shared `native-plan` action selects portable sources,
+resolves legacy extension builds through the portable registry, and allocates
+package revisions. Source downloads are verified against their SHA256 and byte
+count before unpacking.
+
+The workflow supports three entry points:
+
+- Dispatch with `source_tag` and optional `repack`. An already packaged release
+  succeeds without work unless `repack` requests the next revision.
+- Call it with `portable-artifact` and optional `revision` (default `1`). The
+  artifact must contain exactly one glibc extension ZIP and matching portable
+  server tarball for each architecture, preserving their original basenames.
+  For example, `gel-server-7-ext-postgis-3.5.1+c9b5460-x86_64-unknown-linux-gnu.zip`
+  and `gel-server-x86_64-unknown-linux-gnu.tar.zst`. The caller provides trusted
+  build artifacts; no public release is needed. Signed packages are returned as
+  the `native-packages` Actions artifact for the caller's release and manifest.
+- Pull requests build `legacy-gel-server-7-ext-postgis` on both architectures
+  without signing or publishing.
+
+To build a downloaded Actions artifact locally:
 
 ```sh
-python3 scripts/native_packages.py --slot 7 --server-source-tag v7.1 \
-  --source-tag legacy-gel-server-7-ext-postgis --arch aarch64 \
-  --aarch64-asset gel-server-7-ext-postgis-3.5.1+edaa7ce-aarch64-unknown-linux-gnu.zip
+python3 scripts/native_packages.py --portable-directory dist/portable \
+  --revision 1 --arch aarch64
 ```
+
+The workflow downloads the plan’s selected sources with `curl`, verifies their
+SHA256 with `sha256sum`, and checks their byte count. The builder only reads
+local archives; it does not access the network.
 
 The supported `gel-load-ext` installer runs against a scratch portable server.
 All existing paths must retain their type, mode, SHA256 or symlink target. Only
@@ -18,28 +39,29 @@ The packages preserve executable modes and symlinks and depend only on
 Epoch 1 makes native versions newer than legacy versions with build hashes.
 The full portable extension identity remains in the description.
 
-The native packaging workflow accepts exact ZIP names for each architecture,
-a portable server source tag, and a native `server_package_tag` for container
-acceptance. Both server tags must target the requested compatible slot. The
-native server release must already exist before this workflow is used; its test
-packages are also fetched with API SHA256/size verification. Tests install on
-Debian 12 and Rocky Linux 9, apply a schema with `using extension postgis`, and
-query a geometry function while checking the server package version is unchanged.
+Container tests install `gel-server-<slot>` and `gel-cli` from the production
+registry's stable channel after checking its pinned primary key fingerprint.
+They install the built extension on Debian 12 and Rocky Linux 9, apply a schema
+with `using extension postgis`, query a geometry function, and check that the
+server package version remains unchanged. Before server packages are published,
+production install tests cannot pass. For local acceptance with a signed fixture
+registry, set `NATIVE_REGISTRY_URL` and `NATIVE_REGISTRY_FINGERPRINT` in the
+container; the registry must serve the key and the same source-file paths as
+production, with URLs pointing to the fixture. Signature verification remains
+enabled. Built extension RPMs may be unsigned in these build-only tests.
 
-The legacy Bookworm amd64 index at
-`https://packages.geldata.com/apt/dists/bookworm/main/binary-amd64/Packages`
-contains `gel-server-7-ext-postgis` and `gel-server-7-rc3-ext-postgis`. Their
-presence in the repository does not establish that they were installed together.
-Neither entry declares replacement/conflict relationships. No prerelease name
-replacement is therefore declared by these packages.
+The legacy Bookworm amd64 index contains `gel-server-7-ext-postgis` and
+`gel-server-7-rc3-ext-postgis`. Their presence does not establish that they were
+installed together. Neither declares replacement/conflict relationships, so no
+prerelease name replacement is declared.
 
-Build jobs use no secrets. Signing is restricted to the default `main` branch
-and the protected `package-signing` Environment. Configure that Environment
-for the default branch with `PACKAGE_SIGNING_KEY` and `PACKAGE_SIGNING_FPR`.
-RPM verification uses an isolated database containing only the public key.
-The release job computes the v2 manifest from final signed bytes, validates its
-vendored registry schema, uploads a draft, checks API digest/size for packages
-and manifest, then publishes. Testing releases are prereleases. Existing releases
-and assets are never replaced; retries after a retained failed draft need a new
-revision. Production publication requires the Environment protection configured
-in GitHub.
+Build jobs use no signing secrets. Signing runs only on the default branch or
+`release/*` branches in the protected `package-signing` Environment, configured
+with `PACKAGE_SIGNING_KEY` and `PACKAGE_SIGNING_FPR`. Configure that Environment
+to permit only those branches. Reusable callers must run on a branch permitted
+by that Environment; the sign job obtains its secrets from the Environment.
+Shared actions sign and independently verify
+RPMs, generate and validate the final manifest, and publish a digest-verified
+native-only release for dispatch runs. Failed drafts are cleaned up; existing
+published releases and assets are immutable. Testing versions publish as
+prereleases. Reusable calls return packages without publishing a release.
