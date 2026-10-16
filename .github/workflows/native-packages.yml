@@ -3,6 +3,8 @@
 # On a permitted default/release branch this returns signed native-packages;
 # the package-signing Environment supplies signing secrets to the sign job.
 # The caller attaches packages to its release and incorporates their manifest.
+# The caller must forward PACKAGE_SIGNING_KEY and PACKAGE_SIGNING_FPR by name;
+# the sign job receives the values from its protected Environment.
 # The caller uses job must grant contents: write for the nested dispatch-only
 # release job permission envelope, even though that job is skipped on calls.
 name: Native PostGIS packages
@@ -16,6 +18,11 @@ on:
       revision:
         default: '1'
         type: string
+    secrets:
+      PACKAGE_SIGNING_KEY:
+        required: true
+      PACKAGE_SIGNING_FPR:
+        required: true
   workflow_dispatch:
     inputs:
       source_tag:

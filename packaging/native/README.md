@@ -62,7 +62,24 @@ to permit only those branches. Reusable callers must run on a branch permitted
 by that Environment; the sign job obtains its secrets from the Environment.
 The caller’s `uses` job must grant `permissions: {contents: write}` because
 GitHub validates the nested dispatch-only release job’s permission envelope
-even when that job is skipped for a reusable call.
+even when that job is skipped for a reusable call. The caller must also forward
+both required signing secret names, even when their values exist only in the
+protected Environment. GitHub resolves those Environment values in the sign job:
+
+```yaml
+jobs:
+  packages:
+    permissions:
+      contents: write
+    uses: ./.github/workflows/native-packages.yml
+    with:
+      portable-artifact: portable-postgis
+    secrets:
+      PACKAGE_SIGNING_KEY: ${{ secrets.PACKAGE_SIGNING_KEY }}
+      PACKAGE_SIGNING_FPR: ${{ secrets.PACKAGE_SIGNING_FPR }}
+```
+
+Missing secret forwarding fails reusable-call validation before builds start.
 Shared actions sign and independently verify
 RPMs, generate and validate the final manifest, and publish a digest-verified
 native-only release for dispatch runs. Failed drafts are cleaned up; existing
