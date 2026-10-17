@@ -86,7 +86,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: gelstable/gel
-          ref: f5bcbf0912028608c1937ad6bdac3bf772b7ce70 # native build capability and compatibility paths
+          ref: 7ca839a678aec056f897ec0604506e39ac9cf846 # Re-pin to merged gel commit before launch (see README).
           path: server-packaging
           persist-credentials: false
       - uses: gelstable/gel-registry/.github/actions/setup-nfpm@6d3215a7bf494fed5ea0ccd670f7e765a2b70aac

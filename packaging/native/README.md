@@ -84,3 +84,19 @@ RPMs, generate and validate the final manifest, and publish a digest-verified
 native-only release for dispatch runs. Failed drafts are cleaned up; existing
 published releases and assets are immutable. Testing versions publish as
 prereleases. Reusable calls return packages without publishing a release.
+
+### Server release coordination
+
+The server release owner must dispatch this workflow with the slot's extension
+`source_tag` and `repack: true` after every new portable server build is
+published and selected by the portable registry, including security releases.
+The existing-extension-version no-op check does not detect server changes.
+Verify that the repack requires the capability provided by the new native
+server, publish and promote it, and test upgrading server and extension together
+on Debian and Rocky before declaring the server release complete. Until then,
+the exact build dependency intentionally holds back the server upgrade.
+
+Before merging this PR, replace the workflow's server-packaging commit pin with
+the merged commit from gel's native-packaging PR. The branch commit is used
+while the dependent PRs are under review; a default-branch pin is required for
+launch, just as for the shared registry actions.
