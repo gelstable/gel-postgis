@@ -1,0 +1,15 @@
+name: gel-server-@SLOT@-ext-postgis
+arch: @ARCH@
+platform: linux
+version_schema: none
+epoch: "1"
+version: "@VERSION@"
+release: "@REVISION@"
+maintainer: Gel <hello@geldata.com>
+description: PostGIS extension for Gel server @SLOT@, portable build @IDENTITY@.
+homepage: https://www.geldata.com
+license: GPL-2.0-or-later
+depends:
+  - gel-server-@SLOT@
+  - @SERVER_BUILD@
+contents:

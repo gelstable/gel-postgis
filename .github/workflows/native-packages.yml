@@ -1,0 +1,216 @@
+# Reusable callers provide portable-artifact with both glibc extension ZIPs and
+# matching portable server tarballs, plus optional revision (default 1).
+# On a permitted default/release branch this returns signed native-packages;
+# the package-signing Environment supplies signing secrets to the sign job.
+# The caller attaches packages to its release and incorporates their manifest.
+# The caller must forward PACKAGE_SIGNING_KEY and PACKAGE_SIGNING_FPR by name;
+# the sign job receives the values from its protected Environment.
+# The caller uses job must grant contents: write for the nested dispatch-only
+# release job permission envelope, even though that job is skipped on calls.
+name: Native PostGIS packages
+on:
+  workflow_call:
+    inputs:
+      portable-artifact:
+        description: Artifact containing glibc extension ZIPs and matching portable server tarballs
+        required: true
+        type: string
+      revision:
+        default: '1'
+        type: string
+    secrets:
+      PACKAGE_SIGNING_KEY:
+        required: true
+      PACKAGE_SIGNING_FPR:
+        required: true
+  workflow_dispatch:
+    inputs:
+      source_tag:
+        description: Published portable release tag
+        required: true
+        default: legacy-gel-server-7-ext-postgis
+        type: string
+      repack:
+        description: Publish the next revision even if already packaged
+        default: false
+        type: boolean
+  pull_request:
+    paths:
+      - scripts/native_packages.py
+      - packaging/native/**
+      - tests/test_native_packages.py
+      - .github/workflows/native-packages.yml
+permissions:
+  contents: read
+concurrency:
+  group: native-postgis-${{ github.workflow }}-${{ github.ref }}-${{ inputs.source_tag || inputs.portable-artifact || 'legacy-gel-server-7-ext-postgis' }}-${{ inputs.portable-artifact != '' && github.run_id || '' }}
+  cancel-in-progress: false
+jobs:
+  plan:
+    if: inputs.portable-artifact == ''
+    runs-on: ubuntu-24.04
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+    steps:
+      - id: plan
+        uses: gelstable/gel-registry/.github/actions/native-plan@6d3215a7bf494fed5ea0ccd670f7e765a2b70aac
+        with:
+          product: postgis
+          source_tag: ${{ inputs.source_tag || 'legacy-gel-server-7-ext-postgis' }}
+          repack: ${{ github.event_name == 'pull_request' || inputs.repack }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+  build:
+    needs: plan
+    if: >-
+      always() && !cancelled() &&
+      (inputs.portable-artifact != '' ||
+       (needs.plan.result == 'success' && needs.plan.outputs.plan != '[]'))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            native_arch: amd64
+            rpm_arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            native_arch: arm64
+            rpm_arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: gelstable/gel
+          ref: 7ca839a678aec056f897ec0604506e39ac9cf846 # Re-pin to merged gel commit before launch (see README).
+          path: server-packaging
+          persist-credentials: false
+      - uses: gelstable/gel-registry/.github/actions/setup-nfpm@6d3215a7bf494fed5ea0ccd670f7e765a2b70aac
+      - run: sudo apt-get update && sudo apt-get install -y zstd rpm
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -p test_native_packages.py
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: inputs.portable-artifact != ''
+        with:
+          name: ${{ inputs.portable-artifact }}
+          path: dist/portable
+      - name: Download and verify planned portable sources
+        if: inputs.portable-artifact == ''
+        env:
+          PLAN: ${{ needs.plan.outputs.plan }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p dist/portable
+          python3 - <<'PYTHON' > /tmp/native-sources.tsv
+          import json, os, urllib.parse
+          item = json.loads(os.environ["PLAN"])[0]
+          for key in ("sources", "server_sources"):
+              source = item[key][os.environ["ARCH"]]
+              name = urllib.parse.unquote(urllib.parse.urlparse(source["url"]).path.rsplit("/", 1)[1])
+              if not name or any(c in name for c in "/\\\t\n\r"):
+                  raise ValueError("unsafe source basename")
+              print(source["url"], source["sha256"], source["size"], name, sep="\t")
+          PYTHON
+          while IFS=$'\t' read -r url sha size name; do
+            curl --fail --location --silent --show-error --output "dist/portable/$name" -- "$url"
+            printf '%s  %s\n' "$sha" "dist/portable/$name" | sha256sum --check
+            test "$(stat -c %s "dist/portable/$name")" = "$size"
+          done < /tmp/native-sources.tsv
+      - name: Build packages
+        env:
+          PLAN: ${{ needs.plan.outputs.plan }}
+          ARCH: ${{ matrix.arch }}
+          REVISION: ${{ inputs.revision || '1' }}
+        run: |
+          if [[ -n "$PLAN" ]]; then
+            REVISION=$(python3 -c 'import json,os; print(json.loads(os.environ["PLAN"])[0]["revision"])')
+          fi
+          python3 scripts/native_packages.py --portable-directory dist/portable --revision "$REVISION" --arch "$ARCH"
+          if [[ -n "$PLAN" ]]; then
+            python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          expected = json.loads(os.environ["PLAN"])[0]["tag"]
+          actual = json.loads(Path(f'dist/native/build-info-{os.environ["ARCH"]}.json').read_text())["tag"]
+          if actual != expected:
+              raise ValueError(f"built release tag {actual} disagrees with plan {expected}")
+          PYTHON
+          fi
+      - name: Build matching install-test server and fetch verified CLI
+        env:
+          ARCH: ${{ matrix.arch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          server=$(find dist/portable -name "gel-server-$ARCH-unknown-linux-gnu.tar.zst")
+          python3 server-packaging/scripts/native_packages.py --archive "$server" --arch "$ARCH" --out dist/server
+          python3 server-packaging/scripts/native_packages.py --fetch-cli --arch "$ARCH" --out dist/cli
+      - name: Install, bootstrap, query and uninstall on Debian 12 and Rocky 9
+        env:
+          DEB_ARCH: ${{ matrix.native_arch }}
+          RPM_ARCH: ${{ matrix.rpm_arch }}
+        run: |
+          slot=$(python3 -c 'import glob,json; print(json.load(open(glob.glob("dist/native/build-info-*.json")[0]))["slot"])')
+          docker run --rm -v "$PWD/dist/native:/packages:ro" -v "$PWD/dist/server:/server-packages:ro" -v "$PWD/dist/cli:/cli:ro" -v "$PWD/packaging/native:/test:ro" debian:12 bash /test/install-test.sh deb "$DEB_ARCH" "$slot"
+          docker run --rm -v "$PWD/dist/native:/packages:ro" -v "$PWD/dist/server:/server-packages:ro" -v "$PWD/dist/cli:/cli:ro" -v "$PWD/packaging/native:/test:ro" rockylinux:9 bash /test/install-test.sh rpm "$RPM_ARCH" "$slot"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-${{ matrix.arch }}
+          path: |
+            dist/native/*.deb
+            dist/native/*.rpm
+          if-no-files-found: error
+  sign:
+    needs: build
+    if: >-
+      !cancelled() && needs.build.result == 'success' &&
+      github.event_name != 'pull_request' &&
+      (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ||
+       startsWith(github.ref, 'refs/heads/release/'))
+    runs-on: ubuntu-24.04
+    environment: package-signing
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: dist/native
+      - run: sudo apt-get update && sudo apt-get install -y rpm gnupg
+      - uses: gelstable/gel-registry/.github/actions/sign-rpms@6d3215a7bf494fed5ea0ccd670f7e765a2b70aac
+        with:
+          directory: dist/native
+        env:
+          PACKAGE_SIGNING_KEY: ${{ secrets.PACKAGE_SIGNING_KEY }}
+          PACKAGE_SIGNING_FPR: ${{ secrets.PACKAGE_SIGNING_FPR }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-packages
+          path: |
+            dist/native/*.deb
+            dist/native/*.rpm
+          if-no-files-found: error
+  release:
+    needs: [plan, sign]
+    if: github.event_name == 'workflow_dispatch' && inputs.portable-artifact == ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: native-packages
+          path: dist/native
+      - run: sudo apt-get update && sudo apt-get install -y rpm
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: "0.11.6"
+      - name: Publish verified native release
+        uses: gelstable/gel-registry/.github/actions/publish-native-release@6d3215a7bf494fed5ea0ccd670f7e765a2b70aac
+        with:
+          directory: dist/native
+          tag: ${{ fromJSON(needs.plan.outputs.plan)[0].tag }}
+        env:
+          GH_TOKEN: ${{ github.token }}
