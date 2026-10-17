@@ -11,4 +11,5 @@ homepage: https://www.geldata.com
 license: GPL-2.0-or-later
 depends:
   - gel-server-@SLOT@
+  - @SERVER_BUILD@
 contents:

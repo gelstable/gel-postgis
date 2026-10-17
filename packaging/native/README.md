@@ -34,21 +34,20 @@ local archives; it does not access the network.
 The supported `gel-load-ext` installer runs against a scratch portable server.
 All existing paths must retain their type, mode, SHA256 or symlink target. Only
 added files and symlinks are included under `/usr/lib/gel-server-<slot>/`.
-The packages preserve executable modes and symlinks and depend only on
-`gel-server-<slot>`, without a version constraint or catalog dependency.
-Epoch 1 makes native versions newer than legacy versions with build hashes.
-The full portable extension identity remains in the description.
+The packages preserve executable modes and symlinks. They depend on the server
+slot and a `gel-server-<slot>-build-<sha256>` capability provided by the server
+package. The digest covers the complete portable server identity, including its
+build hash. A native packaging repack of the same portable build is compatible;
+a different portable build requires rebuilding the extension. Epoch 1 makes
+native versions newer than legacy versions with build hashes.
 
-Container tests install `gel-server-<slot>` and `gel-cli` from the production
-registry's stable channel after checking its pinned primary key fingerprint.
-They install the built extension on Debian 12 and Rocky Linux 9, apply a schema
-with `using extension postgis`, query a geometry function, and check that the
-server package version remains unchanged. Before server packages are published,
-production install tests cannot pass. For local acceptance with a signed fixture
-registry, set `NATIVE_REGISTRY_URL` and `NATIVE_REGISTRY_FINGERPRINT` in the
-container; the registry must serve the key and the same source-file paths as
-production, with URLs pointing to the fixture. Signature verification remains
-enabled. Built extension RPMs may be unsigned in these build-only tests.
+Container tests build native server packages from the same verified tarball used
+by `gel-load-ext`, using the pinned server packaging checkout in the workflow.
+They fetch a digest-verified portable CLI for queries. Neither server nor CLI is
+installed from the production APT/RPM registry. Tests install the local server
+and extension on Debian 12 and Rocky Linux 9, apply a schema with
+`using extension postgis`, query a geometry function, and check that the server
+package version remains unchanged. Built RPMs are unsigned in build-only tests.
 
 The legacy Bookworm amd64 index contains `gel-server-7-ext-postgis` and
 `gel-server-7-rc3-ext-postgis`. Their presence does not establish that they were
